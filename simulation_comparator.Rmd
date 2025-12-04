@@ -1,0 +1,398 @@
+---
+title: "Simulation Comparison Report"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+# Base simulation (reference)
+base_params_file <- "simulation output/baseline_parameters.csv"
+base_results_file <- "simulation output/baseline_results.csv"
+
+# Comparison simulation
+comp_params_file <- "simulation output/spring forage loss parameters.csv"
+comp_results_file <- "simulation output/spring forage loss results.csv"
+
+# Labels for the simulations
+base_label <- "Baseline"
+comp_label <- "Spring Forage Loss"
+```
+
+```{r load_data}
+# Load parameters
+base_params <- read_csv(base_params_file, show_col_types = FALSE)
+comp_params <- read_csv(comp_params_file, show_col_types = FALSE)
+
+# Load results
+base_results <- read_csv(base_results_file, show_col_types = FALSE)
+comp_results <- read_csv(comp_results_file, show_col_types = FALSE)
+```
+
+## 1. Parameter Changes
+
+This section highlights the differences in input parameters between the two simulations.
+
+```{r param_comparison}
+compare_parameters <- function(base, comp, base_label, comp_label) {
+  comparison <- base %>%
+    select(Parameter, Value, Description) %>%
+    rename(Base_Value = Value) %>%
+    left_join(
+      comp %>% select(Parameter, Value) %>% rename(Comp_Value = Value),
+      by = "Parameter"
+    ) %>%
+    mutate(
+      Difference = Comp_Value - Base_Value,
+      Pct_Change = case_when(
+        Base_Value == 0 & Comp_Value == 0 ~ 0,
+        Base_Value == 0 & Comp_Value != 0 ~ NA_real_,
+        TRUE ~ (Comp_Value - Base_Value) / abs(Base_Value) * 100
+      ),
+      Changed = Base_Value != Comp_Value
+    )
+  
+  names(comparison)[names(comparison) == "Base_Value"] <- base_label
+  names(comparison)[names(comparison) == "Comp_Value"] <- comp_label
+  
+  return(comparison)
+}
+
+param_comparison <- compare_parameters(base_params, comp_params, base_label, comp_label)
+changed_params <- param_comparison %>% filter(Changed) %>% select(-Changed)
+
+if (nrow(changed_params) > 0) {
+  param_table <- changed_params %>%
+    mutate(
+      across(any_of(c(base_label, comp_label, "Difference")), ~round(.x)),
+      Pct_Change = round(Pct_Change, 1)
+    )
+  param_table %>%
+    kable(
+      digits = c(NA, 0, NA, 0, 0, 1),
+      format = "html",
+      caption = "Changed Parameters",
+      format.args = list(big.mark = ",")
+    ) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F) %>%
+    column_spec(6, color = ifelse(param_table$Pct_Change < 0, "red", "green"))
+} else {
+  cat("No parameter differences found.")
+}
+```
+
+## 2. Overall Impact Summary
+
+A high-level overview of the total impact on key financial and biological metrics.
+
+```{r overall_impact}
+overall_impact <- data.frame(
+  Metric = c(
+    "Total Profit (undiscounted)",
+    "Total NPV Profit",
+    "Total Honey Revenue",
+    "Total Crop Revenue",
+    "Total Costs",
+    "Final Colony Count"
+  ),
+  stringsAsFactors = FALSE
+)
+
+overall_impact$Base <- c(
+  sum(base_results$profit, na.rm = TRUE),
+  sum(base_results$pv_profit, na.rm = TRUE),
+  sum(base_results$revenue_honey, na.rm = TRUE),
+  sum(base_results$revenue_crop, na.rm = TRUE),
+  sum(base_results$cost_maintenance + base_results$cost_feed + base_results$management_cost, na.rm = TRUE),
+  tail(base_results$colonies_end_mgmt, 1)
+)
+
+overall_impact$Comparison <- c(
+  sum(comp_results$profit, na.rm = TRUE),
+  sum(comp_results$pv_profit, na.rm = TRUE),
+  sum(comp_results$revenue_honey, na.rm = TRUE),
+  sum(comp_results$revenue_crop, na.rm = TRUE),
+  sum(comp_results$cost_maintenance + comp_results$cost_feed + comp_results$management_cost, na.rm = TRUE),
+  tail(comp_results$colonies_end_mgmt, 1)
+)
+
+overall_impact$Difference <- overall_impact$Comparison - overall_impact$Base
+
+overall_impact$Pct_Change <- ifelse(
+  overall_impact$Base == 0,
+  NA,
+  (overall_impact$Comparison - overall_impact$Base) / abs(overall_impact$Base) * 100
+)
+
+names(overall_impact)[names(overall_impact) == "Base"] <- base_label
+names(overall_impact)[names(overall_impact) == "Comparison"] <- comp_label
+
+overall_table <- overall_impact %>%
+  mutate(
+    across(all_of(c(base_label, comp_label, "Difference")), ~round(.x)),
+    Pct_Change = round(Pct_Change, 1)
+  )
+
+overall_table %>%
+  kable(
+    digits = c(NA, 0, 0, 0, 1),
+    format = "html",
+    format.args = list(big.mark = ",")
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = F) %>%
+  column_spec(5, bold = TRUE, color = ifelse(overall_table$Pct_Change < 0, "red", "green"))
+```
+
+## 3. Detailed Results Summary
+
+Breakdown of key metrics by totals, averages, and final values.
+
+```{r results_summary_func}
+compare_results_summary <- function(base, comp, base_label, comp_label) {
+  key_metrics <- c(
+    "colonies_start", "colonies_end", "colonies_end_mgmt",
+    "frames_start", "frames_end", "frames_end_mgmt", "frames_per_colony",
+    "total_foragers", "forager_share",
+    "forage_collected", "forage_consumed", "net_forage", "honey_harvested",
+    "crop_yield",
+    "revenue_honey", "revenue_crop",
+    "cost_maintenance", "cost_feed", "management_cost",
+    "profit", "pv_profit"
+  )
+  
+  available_metrics <- key_metrics[key_metrics %in% names(base)]
+  
+  base_summary <- base %>%
+    summarise(across(all_of(available_metrics), list(
+      total = ~sum(.x, na.rm = TRUE),
+      mean = ~mean(.x, na.rm = TRUE),
+      final = ~last(.x)
+    )))
+  
+  comp_summary <- comp %>%
+    summarise(across(all_of(available_metrics), list(
+      total = ~sum(.x, na.rm = TRUE),
+      mean = ~mean(.x, na.rm = TRUE),
+      final = ~last(.x)
+    )))
+  
+  base_long <- base_summary %>% pivot_longer(everything(), names_to = "Metric", values_to = "Base_Value")
+  comp_long <- comp_summary %>% pivot_longer(everything(), names_to = "Metric", values_to = "Comp_Value")
+  
+  comparison <- base_long %>%
+    left_join(comp_long, by = "Metric") %>%
+    mutate(
+      Difference = Comp_Value - Base_Value,
+      Pct_Change = case_when(
+        Base_Value == 0 & Comp_Value == 0 ~ 0,
+        Base_Value == 0 & Comp_Value != 0 ~ NA_real_,
+        TRUE ~ (Comp_Value - Base_Value) / abs(Base_Value) * 100
+      )
+    ) %>%
+    mutate(
+      Variable = str_replace(Metric, "_(total|mean|final)$", ""),
+      Statistic = str_extract(Metric, "(total|mean|final)$")
+    ) %>%
+    select(Variable, Statistic, Base_Value, Comp_Value, Difference, Pct_Change)
+  
+  names(comparison)[names(comparison) == "Base_Value"] <- base_label
+  names(comparison)[names(comparison) == "Comp_Value"] <- comp_label
+  
+  return(comparison)
+}
+
+results_summary <- compare_results_summary(base_results, comp_results, base_label, comp_label)
+```
+
+### Totals
+```{r totals}
+totals <- results_summary %>% 
+  filter(Statistic == "total") %>%
+  select(-Statistic) %>%
+  filter(abs(Pct_Change) > 0.01 | is.na(Pct_Change)) %>%
+  mutate(
+    across(any_of(c(base_label, comp_label, "Difference")), ~round(.x)),
+    Pct_Change = round(Pct_Change, 1)
+  )
+
+totals %>%
+  kable(
+    digits = c(NA, 0, 0, 0, 1),
+    format = "html",
+    format.args = list(big.mark = ",")
+  ) %>%
+  kable_styling(bootstrap_options = "condensed", full_width = F)
+```
+
+### Averages
+```{r means}
+means <- results_summary %>% 
+  filter(Statistic == "mean") %>%
+  select(-Statistic) %>%
+  filter(abs(Pct_Change) > 0.01 | is.na(Pct_Change)) %>%
+  mutate(
+    across(any_of(c(base_label, comp_label, "Difference")), ~round(.x)),
+    Pct_Change = round(Pct_Change, 1)
+  )
+
+means %>%
+  kable(
+    digits = c(NA, 0, 0, 0, 1),
+    format = "html",
+    format.args = list(big.mark = ",")
+  ) %>%
+  kable_styling(bootstrap_options = "condensed", full_width = F)
+```
+
+### Final Values (End of Simulation)
+```{r finals}
+finals <- results_summary %>% 
+  filter(Statistic == "final") %>%
+  select(-Statistic) %>%
+  filter(abs(Pct_Change) > 0.01 | is.na(Pct_Change)) %>%
+  mutate(
+    across(any_of(c(base_label, comp_label, "Difference")), ~round(.x)),
+    Pct_Change = round(Pct_Change, 1)
+  )
+
+finals %>%
+  kable(
+    digits = c(NA, 0, 0, 0, 1),
+    format = "html",
+    format.args = list(big.mark = ",")
+  ) %>%
+  kable_styling(bootstrap_options = "condensed", full_width = F)
+```
+
+## 4. Seasonal Analysis
+
+Comparison of average values for each season.
+
+```{r seasonal_analysis, results='asis'}
+compare_by_season <- function(base, comp, base_label, comp_label) {
+  key_metrics <- c(
+    "colonies_end_mgmt", "frames_end_mgmt", "frames_per_colony",
+    "honey_harvested", "crop_yield", "profit", "pv_profit"
+  )
+  available_metrics <- key_metrics[key_metrics %in% names(base)]
+  
+  base_season <- base %>% group_by(season) %>% summarise(across(all_of(available_metrics), ~mean(.x, na.rm = TRUE)), .groups = "drop")
+  comp_season <- comp %>% group_by(season) %>% summarise(across(all_of(available_metrics), ~mean(.x, na.rm = TRUE)), .groups = "drop")
+  
+  base_long <- base_season %>% pivot_longer(-season, names_to = "Metric", values_to = "Base_Value")
+  comp_long <- comp_season %>% pivot_longer(-season, names_to = "Metric", values_to = "Comp_Value")
+  
+  comparison <- base_long %>%
+    left_join(comp_long, by = c("season", "Metric")) %>%
+    mutate(
+      Difference = Comp_Value - Base_Value,
+      Pct_Change = case_when(
+        Base_Value == 0 & Comp_Value == 0 ~ 0,
+        Base_Value == 0 & Comp_Value != 0 ~ NA_real_,
+        TRUE ~ (Comp_Value - Base_Value) / abs(Base_Value) * 100
+      )
+    ) %>%
+    rename(Season = season, Variable = Metric)
+  
+  names(comparison)[names(comparison) == "Base_Value"] <- base_label
+  names(comparison)[names(comparison) == "Comp_Value"] <- comp_label
+  
+  return(comparison)
+}
+
+season_comparison <- compare_by_season(base_results, comp_results, base_label, comp_label)
+
+for (s in c("Spring", "Summer", "Fall", "Winter")) {
+  season_data <- season_comparison %>%
+    filter(Season == s, abs(Pct_Change) > 0.01 | is.na(Pct_Change))
+  
+  if (nrow(season_data) > 0) {
+    cat(paste0("### ", s, "\n"))
+    season_display <- season_data %>%
+      select(-Season) %>%
+      mutate(
+        across(any_of(c(base_label, comp_label, "Difference")), ~round(.x)),
+        Pct_Change = round(Pct_Change, 1)
+      )
+    table_html <- season_display %>%
+      kable(
+        digits = c(NA, 0, 0, 0, 1),
+        format = "html",
+        format.args = list(big.mark = ",")
+      ) %>%
+      kable_styling(bootstrap_options = "condensed", full_width = F)
+    print(table_html)
+    cat("\n")
+  }
+}
+```
+
+## 5. Yearly Evolution
+
+Percentage change in key metrics year over year.
+
+```{r yearly_analysis}
+compare_by_year <- function(base, comp, base_label, comp_label) {
+  key_metrics <- c("colonies_end_mgmt", "profit", "pv_profit")
+  available_metrics <- key_metrics[key_metrics %in% names(base)]
+  
+  base_year <- base %>% group_by(year) %>% summarise(across(all_of(available_metrics), ~sum(.x, na.rm = TRUE)), .groups = "drop")
+  comp_year <- comp %>% group_by(year) %>% summarise(across(all_of(available_metrics), ~sum(.x, na.rm = TRUE)), .groups = "drop")
+  
+  # For colonies, take end of year (Winter value)
+  base_year_colonies <- base %>% filter(season == "Winter") %>% select(year, colonies_end_mgmt) %>% rename(colonies_eoy = colonies_end_mgmt)
+  comp_year_colonies <- comp %>% filter(season == "Winter") %>% select(year, colonies_end_mgmt) %>% rename(colonies_eoy = colonies_end_mgmt)
+  
+  base_year <- base_year %>% left_join(base_year_colonies, by = "year")
+  comp_year <- comp_year %>% left_join(comp_year_colonies, by = "year")
+  
+  base_long <- base_year %>% pivot_longer(-year, names_to = "Metric", values_to = "Base_Value")
+  comp_long <- comp_year %>% pivot_longer(-year, names_to = "Metric", values_to = "Comp_Value")
+  
+  comparison <- base_long %>%
+    left_join(comp_long, by = c("year", "Metric")) %>%
+    mutate(
+      Difference = Comp_Value - Base_Value,
+      Pct_Change = case_when(
+        Base_Value == 0 & Comp_Value == 0 ~ 0,
+        Base_Value == 0 & Comp_Value != 0 ~ NA_real_,
+        TRUE ~ (Comp_Value - Base_Value) / abs(Base_Value) * 100
+      )
+    ) %>%
+    rename(Year = year, Variable = Metric)
+  
+  return(comparison)
+}
+
+year_comparison <- compare_by_year(base_results, comp_results, base_label, comp_label)
+
+year_table <- year_comparison %>%
+  select(Year, Variable, Pct_Change) %>%
+  pivot_wider(names_from = Variable, values_from = Pct_Change) %>%
+  mutate(
+    Year = round(Year),
+    across(-Year, ~round(.x, 1))
+  )
+
+digits_vector <- c(0, rep(1, ncol(year_table) - 1))
+
+year_table %>%
+  kable(
+    digits = digits_vector,
+    format = "html",
+    caption = "Percentage Change by Year"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = F)
+```
