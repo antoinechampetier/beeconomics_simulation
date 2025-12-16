@@ -1,0 +1,404 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{graphicx}
+
+\geometry{margin=1in}
+
+\title{Beekeeping Economics Model: Mathematical Specification}
+\author{Extracted from live\_beekeeping\_explorer\_v2.R}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Core Model Equations}
+
+\subsection{Forager Allocation}
+
+The share of bees allocated to foraging activities is determined by colony strength:
+
+\begin{equation}
+\text{Forager Share} = \frac{1}{1 + e^{\omega - \theta \cdot \text{frames per colony}}}
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $\omega$ = base foraging parameter (default: 0.5)
+    \item $\theta$ = colony strength coefficient (default: 0.3)
+    \item frames per colony = $\frac{\text{total frames}}{\text{total colonies}}$
+\end{itemize}
+
+Total foragers are then:
+\begin{equation}
+\text{Total Foragers} = \text{Forager Share} \times \text{Total Frames}
+\end{equation}
+
+\subsection{Forage Production}
+
+Forage collection follows a simple piecewise linear production function:
+
+\textbf{Marginal forage production:}
+\begin{equation}
+f'(x) = \begin{cases}
+A & \text{if } x < B \\
+0 & \text{if } x \geq B
+\end{cases}
+\end{equation}
+
+\textbf{Total forage production (integral):}
+\begin{equation}
+F(x) = \begin{cases}
+A \cdot x & \text{if } x < B \\
+A \cdot B & \text{if } x \geq B
+\end{cases}
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $F(x)$ = total forage collected
+    \item $f'(x)$ = marginal forage production
+    \item $x$ = total foragers
+    \item $A$ = marginal forage production capacity (varies by season)
+    \item $B$ = saturation point for foragers (varies by season)
+    \item $I$ = parameter (not currently used, reserved for future extensions)
+\end{itemize}
+
+\subsection{Crop Yield (Pollination Services)}
+
+Crop yield from pollination services follows an analogous piecewise linear function:
+
+\textbf{Marginal crop yield:}
+\begin{equation}
+y'(x) = \begin{cases}
+D & \text{if } x < E \\
+0 & \text{if } x \geq E
+\end{cases}
+\end{equation}
+
+\textbf{Total crop yield (integral):}
+\begin{equation}
+Y(x) = \begin{cases}
+D \cdot x & \text{if } x < E \\
+D \cdot E & \text{if } x \geq E
+\end{cases}
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $Y(x)$ = total crop yield
+    \item $y'(x)$ = marginal crop yield
+    \item $x$ = total foragers
+    \item $D$ = marginal crop production capacity (varies by season)
+    \item $E$ = saturation point for foragers (varies by season)
+    \item $G$ = parameter (not currently used, reserved for future extensions)
+\end{itemize}
+
+The marginal product of foragers for pollination revenue is used directly:
+\begin{equation}
+\frac{\partial Y}{\partial x} = y'(x) = \begin{cases}
+D & \text{if } x < E \\
+0 & \text{if } x \geq E
+\end{cases}
+\end{equation}
+
+\subsection{Bee Stock Dynamics}
+
+Colony and frame dynamics evolve according to:
+
+\begin{align}
+\text{Frames}_{t+1} &= \max(0, \text{Frames}_t + \beta \cdot \text{Colonies}_t - \delta \cdot \text{Frames}_t) \\
+\text{Colonies}_{t+1} &= \text{Colonies}_t \cdot (1 - \delta)
+\end{align}
+
+where:
+\begin{itemize}
+    \item $\beta = \alpha \cdot t_{\text{dur}}$ (growth per period)
+    \item $\alpha$ = weekly growth rate (frames per colony per week)
+    \item $\delta$ = loss rate per period
+    \item $t_{\text{dur}}$ = period duration in weeks (default: 13)
+\end{itemize}
+
+\subsection{Feed Balance}
+
+Feed consumption and requirements:
+\begin{align}
+\text{Forage Consumed} &= \text{Total Frames} \times \gamma \times t_{\text{dur}} \\
+\text{Net Forage} &= \text{Forage Collected} - \text{Forage Consumed} \\
+\text{Feed Required} &= \max(0, -\text{Net Forage}) \\
+\text{Honey Harvested} &= \max(0, \text{Net Forage})
+\end{align}
+
+where $\gamma$ = feed consumption rate (lbs per frame per week, default: 1.5)
+
+\section{Management Operations}
+
+\subsection{Management Actions}
+
+At the end of each period, three management actions can be applied:
+
+\begin{align}
+\text{Culling:} \quad &\text{Colonies}_{t+1} \leftarrow \text{Colonies}_{t+1} \times (1 - r_{\text{cull}}) \\
+&\text{Frames}_{t+1} \leftarrow \text{Frames}_{t+1} \times (1 - r_{\text{cull}}) \\
+\text{Splitting:} \quad &\text{Colonies}_{t+1} \leftarrow \text{Colonies}_{t+1} \times (1 + r_{\text{split}}) \\
+\text{Merging:} \quad &\text{Colonies}_{t+1} \leftarrow \text{Colonies}_{t+1} \times (1 - r_{\text{merge}})
+\end{align}
+
+\subsection{Management Constraints}
+
+The model enforces mutual exclusion between splitting and merging:
+\begin{equation}
+r_{\text{split},s} > 0 \Rightarrow r_{\text{merge},s} = 0 \quad \forall s \in \{\text{seasons}\}
+\end{equation}
+
+This constraint is implemented via penalty function in optimization:
+\begin{equation}
+\text{Penalty} = \sum_{s} 10^6 \times r_{\text{split},s} \times r_{\text{merge},s} \times \mathbf{1}_{r_{\text{split},s} > 0.1, r_{\text{merge},s} > 0.1}
+\end{equation}
+
+\section{Economic Model}
+
+\subsection{Revenue Streams}
+
+\begin{align}
+\text{Revenue}_{\text{honey}} &= \text{Honey Harvested} \times P_h \\
+\text{Revenue}_{\text{crop}} &= \frac{\partial Y}{\partial x} \times P_c \times \text{Total Foragers}
+\end{align}
+
+where:
+\begin{itemize}
+    \item $P_h$ = honey price per unit (seasonal, default: \$3.0)
+    \item $P_c$ = crop price per unit (seasonal, default: \$0.5)
+\end{itemize}
+
+\subsection{Cost Structure}
+
+\begin{align}
+\text{Cost}_{\text{maintenance}} &= \text{Colonies} \times \frac{\text{Cost}}{4} \\
+\text{Cost}_{\text{feed}} &= \text{Feed Required} \times P_{\text{feed}} \\
+\text{Cost}_{\text{management}} &= \sum_{a \in \{\text{cull, split, merge}\}} r_a \times \text{Units}_a \times P_a
+\end{align}
+
+where:
+\begin{itemize}
+    \item Cost = annual maintenance cost per colony (default: \$50)
+    \item $P_{\text{feed}}$ = feed price per unit (default: \$0.02)
+    \item $P_{\text{cull}}, P_{\text{split}}, P_{\text{merge}}$ = management operation costs
+\end{itemize}
+
+\subsection{Profit Function}
+
+Period profit:
+\begin{equation}
+\pi_t = \text{Revenue}_{\text{honey},t} + \text{Revenue}_{\text{crop},t} - \text{Cost}_{\text{maintenance},t} - \text{Cost}_{\text{feed},t} - \text{Cost}_{\text{management},t}
+\end{equation}
+
+Present value of total profits:
+\begin{equation}
+\Pi = \sum_{t=1}^T \frac{\pi_t}{(1 + r_q)^{t-1}}
+\end{equation}
+
+where $r_q = (1 + r_a)^{1/4} - 1$ is the quarterly discount rate derived from annual rate $r_a$.
+
+\section{Parameter Values}
+
+\subsection{Parameter Count Summary}
+
+The beekeeping economics model contains a total of \textbf{59 parameters} across several categories:
+
+\subsubsection{Biological Parameters (25 total)}
+
+\textbf{Core Biological Parameters (9):}
+\begin{itemize}
+\item $\alpha$ (growth rate)
+\item $\delta$ (loss rate) 
+\item $\omega$ (base foraging parameter)
+\item $\theta$ (colony strength coefficient)
+\item $\gamma$ (feed consumption rate)
+\item $B$ (forage saturation parameter)
+\item $E$ (crop saturation parameter)
+\item $I$ (forage collection threshold)
+\item $G$ (crop yield threshold)
+\end{itemize}
+
+\textbf{Season-Specific Biological Parameters (16):}
+\begin{itemize}
+\item Growth factors (4 seasons)
+\item Loss factors (4 seasons) 
+\item Forage capacities $A$ (4 seasons)
+\item Crop capacities $D$ (4 seasons)
+\end{itemize}
+
+\begin{itemize}
+\item Cost (annual maintenance cost)
+\item $P_{\text{feed}}$ (feed price)
+\item $P_{\text{split}}$ (splitting cost)
+\item $P_{\text{merge}}$ (merging cost)
+\item $P_{\text{cull}}$ (culling cost)
+\item $r_a$ (annual discount rate)
+\end{itemize}
+
+\begin{itemize}
+\item Colonies$_0$ (initial colonies)
+\item Frames$_0$ (initial frames)
+\end{itemize}
+
+\begin{itemize}
+\item Years (simulation length)
+\end{itemize}
+
+\subsubsection{Fixed Parameters (5 total)}
+\begin{itemize}
+\item $t_{\text{dur}}$ (period duration) - fixed at 13 weeks
+\item Plus the seasonal capacities $A$ and $D$ for each season (derived from seasonal table)
+\end{itemize}
+
+\subsubsection{Additional Economic Seasonal Parameters (8 total)}
+From the seasonal variations table, seasonal multipliers for:
+\begin{itemize}
+\item Honey prices $P_h$ (4 seasons)
+\item Crop prices $P_c$ (4 seasons)
+\end{itemize}
+
+\subsubsection{Management Parameters (12 total)}
+Decision variables for 12 management rates (3 actions × 4 seasons): culling, splitting, merging rates.
+
+\subsubsection{Total Parameter Count}
+\begin{itemize}
+\item \textbf{Biological parameters:} 25 parameters (9 core + 16 season-specific)
+\item \textbf{Economic parameters:} 6 parameters
+\item \textbf{Initial conditions:} 2 parameters
+\item \textbf{Simulation parameters:} 1 parameter
+\item \textbf{Fixed parameters:} 5 parameters
+\item \textbf{Economic seasonal variations:} 8 parameters  
+\item \textbf{Management decisions:} 12 parameters
+\item \textbf{Grand total:} 59 parameters
+\end{itemize}
+
+\subsection{Default Parameter Values}
+
+\begin{longtable}{lp{6cm}rrr}
+\toprule
+Parameter & Description & Default & Min & Max \\
+\midrule
+\multicolumn{5}{l}{\textbf{Biological Parameters}} \\
+$\alpha$ & Growth rate (frames/colony/week) & 0.1 & 0 & 1.0 \\
+$\delta$ & Loss rate per season & 0.05 & 0.01 & 0.2 \\
+$\omega$ & Base foraging parameter & 0.5 & 0.1 & 1.0 \\
+$\theta$ & Colony strength coefficient & 0.3 & 0.1 & 0.5 \\
+$\gamma$ & Feed consumption (lbs/frame/week) & 0.5 & 0 & 5.0 \\
+\midrule
+\multicolumn{5}{l}{\textbf{Economic Parameters}} \\
+Cost & Annual maintenance cost per colony (\$) & 50 & 0 & 400 \\
+$P_{\text{feed}}$ & Feed price per unit (\$) & 0.02 & 0 & 10 \\
+$P_{\text{split}}$ & Splitting cost per operation (\$) & 25 & 0 & 100 \\
+$P_{\text{merge}}$ & Merging cost per operation (\$) & 10 & 0 & 100 \\
+$P_{\text{cull}}$ & Culling cost per operation (\$) & 10 & 0 & 100 \\
+$r_a$ & Annual discount rate (\%) & 3 & 0 & 15 \\
+\midrule
+\multicolumn{5}{l}{\textbf{Initial Conditions}} \\
+Colonies$_0$ & Initial number of colonies & 1,000 & 100 & 5,000 \\
+Frames$_0$ & Initial number of frames & 6,000 & 500 & 30,000 \\
+$t_{\text{dur}}$ & Period duration (weeks) & 13 & -- & -- \\
+\midrule
+\multicolumn{5}{l}{\textbf{Simulation Parameters}} \\
+Years & Number of years to simulate & 5 & 1 & 30 \\
+\bottomrule
+\end{longtable}
+
+\subsection{Seasonal Parameter Variations}
+
+\begin{longtable}{lrrrrr}
+\toprule
+Parameter & Spring & Summer & Fall & Winter & Range \\
+\midrule
+\multicolumn{6}{l}{\textbf{Growth/Loss Factors}} \\
+Growth Factor & 1.0 & 1.0 & 0.3 & 0.3 & [0, 2.0] \\
+Loss Factor & 1.0 & 1.0 & 1.2 & 2.0 & [0, 5.0] \\
+\midrule
+\multicolumn{6}{l}{\textbf{Production Capacities}} \\
+$A$ (Forage) & 100 & 300 & 0 & 0 & [0, 500] \\
+$D$ (Crop) & 15 & 15 & 0 & 0 & [0, 2000] \\
+\midrule
+\multicolumn{6}{l}{\textbf{Market Prices}} \\
+$P_h$ (Honey, \$) & 3.0 & 3.0 & 3.0 & 3.0 & [1.0, 10.0] \\
+$P_c$ (Crop, \$) & 0.5 & 0.5 & 0.5 & 0.5 & [0.1, 2.0] \\
+\midrule
+\multicolumn{6}{l}{\textbf{Management Rates (\%)}} \\
+Culling & 0 & 0 & 0 & 5 & [0, 100] \\
+Splitting & 30 & 20 & 0 & 0 & [0, 100] \\
+Merging & 0 & 0 & 5 & 10 & [0, 100] \\
+\bottomrule
+\end{longtable}
+
+\section{Optimization Problem}
+
+The beekeeping management optimization problem is:
+
+\begin{align}
+\max_{r_{a,s}} \quad &\Pi = \sum_{t=1}^T \frac{\pi_t(r_{a,s})}{(1 + r_q)^{t-1}} \\
+\text{subject to:} \quad &0 \leq r_{a,s} \leq 1 \quad \forall a \in \{\text{cull, split, merge}\}, s \in \{\text{seasons}\} \\
+&r_{\text{split},s} \cdot r_{\text{merge},s} = 0 \quad \forall s \in \{\text{seasons}\}
+\end{align}
+
+where $r_{a,s}$ represents the rate of management action $a$ in season $s$.
+
+\section{Model Function Visualizations}
+
+This section presents graphical representations of the three core production functions under different parameter scenarios to illustrate the model's behavioral characteristics.
+
+\subsection{Forager Share Function}
+
+Figure \ref{fig:forager_share} shows how the forager allocation responds to colony strength (measured by frames per colony) under minimum, default, and maximum parameter values. The logistic shape ensures smooth transitions while preventing unrealistic allocations.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.8\textwidth]{forager_share_function.pdf}
+\caption{Forager share as a function of frames per colony under different parameter scenarios. The Min scenario uses $\omega = 0.1, \theta = 0.1$; Default uses $\omega = 0.5, \theta = 0.3$; Max uses $\omega = 1.0, \theta = 0.5$.}
+\label{fig:forager_share}
+\end{figure}
+
+\subsection{Forage Collection Functions by Season}
+
+Figure \ref{fig:forage_collection} illustrates forage collection across the four seasons, showing how seasonal capacity ($A$) and diminishing returns ($B$) interact to determine total forage collected as a function of forager effort.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{forage_collection_functions.pdf}
+\caption{Forage collection functions by season under different parameter scenarios. Spring and Summer show active forage periods, while Fall and Winter have minimal capacity. Min scenarios use $A = 0$ (inactive seasons) or $A = 100/300$ (active seasons) with $B = 0.0001$; Default uses base values; Max uses $A = 500$ with $B = 0.01$.}
+\label{fig:forage_collection}
+\end{figure}
+
+\subsection{Crop Yield Functions by Season}
+
+Figure \ref{fig:crop_yield} shows pollination-derived crop yields across seasons, demonstrating the economic returns from deploying foragers to agricultural contracts rather than natural forage collection.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{crop_yield_functions.pdf}
+\caption{Crop yield functions by season under different parameter scenarios. The functions show similar seasonal patterns to forage collection but with different scaling parameters ($D$ and $E$) reflecting economic rather than biological constraints.}
+\label{fig:crop_yield}
+\end{figure}
+
+\subsection{Function Characteristics}
+
+Key observations from the function plots:
+
+\begin{enumerate}
+\item \textbf{Forager Share:} Exhibits classic logistic behavior with steeper transitions under higher $\theta$ values, ensuring realistic forager allocation constraints.
+
+\item \textbf{Seasonal Variation:} Both forage and crop functions show strong seasonal patterns, with Spring and Summer being productive periods while Fall and Winter show minimal activity.
+
+\item \textbf{Diminishing Returns:} All production functions display diminishing marginal returns, preventing unrealistic linear scaling of outputs with inputs.
+
+\item \textbf{Parameter Sensitivity:} The functions show substantial sensitivity to capacity parameters ($A$, $D$) but more moderate sensitivity to curvature parameters ($B$, $E$).
+
+\item \textbf{Threshold Effects:} The logistic formulations create natural threshold effects where small increases in forager allocation can yield large increases in output near inflection points.
+\end{enumerate}
+
+\end{document}
