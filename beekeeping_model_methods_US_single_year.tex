@@ -1,0 +1,159 @@
+% Methods section for US beekeeping single-year Shiny model
+% Implementation: beekeeping_US_single_year.R (multi-location, seasonal parameters)
+%
+% Compile standalone or \input{} into main manuscript (requires amsmath, booktabs).
+
+\documentclass[11pt]{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{hyperref}
+
+\geometry{margin=1in}
+
+\title{Methods: US Beekeeping Economic Model\\{\large Specification aligned with \texttt{beekeeping\_US\_single\_year.R}}}
+\author{}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\noindent
+We specify a discrete-time, seasonal model of a commercial beekeeping operation. The horizon is one year divided into four periods (Spring, Summer, Fall, Winter), each of equal calendar length. The core state variables are total colony count and total ``frame'' stock: throughout, a frame is a unit of account for the mass of bees (e.g.\ frames of bees), not a separate physical equipment choice. Production within each period combines a logistic rule for how ``foraging capacity'' scales with average colony strength, simple step functions for nectar/forage collection and for pollination services, a feed balance that splits net output into marketable honey versus purchased feed, and biological laws of motion for bee mass and colony counts. Seasonal and location-specific parameters allow the same framework to represent migration among crops and yards. End-of-period management captures voluntary culling and colony splitting or merging. The structure is implemented in an R/Shiny application; this document states the equations used in that implementation.
+\end{abstract}
+
+\section{Timing and state variables}
+
+Commercial pollination and honey operations often move colonies among regions within a year. We therefore index time by period $t=1,\ldots,4$ within a single year. The order of seasons on the calendar can start at any season (e.g.\ a fiscal year beginning in winter). Each period has fixed duration $t_{\mathrm{dur}}$ (weeks), so that seasonal parameters can be interpreted as applying to comparable time windows.
+
+Let $C_t$ be total colonies and $F_t$ total bee mass at the \emph{start} of period $t$, measured in frame units (frames of bees), before within-period production and before any end-of-period management. The ratio $F_t/C_t$ is average colony strength in those units.
+
+\paragraph{Multi-location allocation.}
+For each season $s$, the operator may allocate a fixed share of colonies across $L_s$ active locations $i=1,\ldots,L_s$ using weights $w_{i,s}$ (non-negative, summing to one). Location $i$ receives $C_{i,t}=w_{i,s} C_t$ colonies. Total bee mass $F_t$ (in frame units) is split across locations subject to targets for frames per colony: either equal strength across sites or a target for a primary site with implied targets elsewhere, then rescaled so that $\sum_i F_{i,t}=F_t$. This device captures, in reduced form, the idea that the same firm places colonies in different forage or pollination contexts within a season while keeping a single aggregate inventory of bees.
+
+\section{Within-period production (each location)}
+
+For location $i$ in period $t$, let $f_{i,t}=F_{i,t}/C_{i,t}$ denote bee mass per colony in frame units (set to zero if $C_{i,t}=0$). Parameters $\omega_{i,t}$ and $\theta_{i,t}$ are season- and location-specific controls on how colony strength maps to foraging effort.
+
+\subsection{Forager share and effective foragers}
+
+Stronger colonies (more bee mass per colony in frame units) are assumed to devote a larger fraction of bees to foraging, as a smooth logistic curve. The forager share is
+\begin{equation}
+\sigma_{i,t} = \frac{1}{1+\exp\!\left(\omega_{i,t}-\theta_{i,t}\, f_{i,t}\right)}.
+\end{equation}
+When $f_{i,t}$ is small, $\sigma_{i,t}$ is near $1/(1+e^{\omega_{i,t}})$; as $f_{i,t}$ rises, $\sigma_{i,t}$ increases toward one, reflecting stronger field forces per unit of stock. Total effective foragers in the same (frame) units are
+\begin{equation}
+X_{i,t} = \sigma_{i,t}\, F_{i,t}.
+\end{equation}
+Thus $X_{i,t}$ scales both with bee mass and with the intensity of foraging activity per unit of mass.
+
+\subsection{Honey-related forage balance}
+
+Nectar and pollen collection are summarized by a highly stylized production function in effective foragers $x$. Marginal collection is ``high until saturation''---a step in $x$ with height $A_{i,t}$ and a threshold $B_{i,t}$:
+\begin{equation}
+m_F(x) = \begin{cases}
+A_{i,t} & \text{if } x < B_{i,t} \\
+0 & \text{if } x \ge B_{i,t}.
+\end{cases}
+\end{equation}
+Economically, $A_{i,t}$ acts as a scale for forage productivity per unit of foraging capacity when the site is not yet saturated; $B_{i,t}$ is a forager count beyond which the local flow is treated as capped. The implied total forage collected over the period is the piecewise linear integral:
+\begin{equation}
+F_{\mathrm{col},i,t} = \begin{cases}
+A_{i,t}\, X_{i,t} & \text{if } X_{i,t} < B_{i,t} \\
+A_{i,t}\, B_{i,t} & \text{if } X_{i,t} \ge B_{i,t}.
+\end{cases}
+\end{equation}
+So collection rises linearly with $X$ until the threshold, then is flat---a simple way to represent a finite carrying capacity of the landscape for the season.
+
+Feed needs are proportional to bee mass (in frame units) and to season length: bees consume sugar and protein whether or not the landscape is generous. Let
+\begin{equation}
+U_{i,t} = F_{i,t}\, \gamma_{i,t}\, t_{\mathrm{dur}},
+\end{equation}
+where $\gamma_{i,t}$ is feed use (lbs per frame-of-bees per week). Net forage available for honey versus purchased feed is the surplus of collection over consumption:
+\begin{equation}
+N_{i,t} = F_{\mathrm{col},i,t} - U_{i,t}.
+\end{equation}
+If $N_{i,t}<0$, the operation must buy feed; if $N_{i,t}>0$, it is treated as marketable honey. Thus
+\begin{equation}
+U^+_{i,t} = \max(0,-N_{i,t}), \qquad
+H_{i,t} = \max(0,N_{i,t}).
+\end{equation}
+This is a short-run accounting identity: honey revenue and feed cost are not forward-looking storage decisions.
+
+\subsection{Pollination / crop revenue}
+
+Pollination services are modeled with a parallel step structure in foragers, with height $D_{i,t}$ and threshold $E_{i,t}$:
+\begin{equation}
+m_Y(x) = \begin{cases}
+D_{i,t} & \text{if } x < E_{i,t} \\
+0 & \text{if } x \ge E_{i,t}.
+\end{cases}
+\end{equation}
+Pollination revenue is specified as
+\begin{equation}
+R_{\mathrm{crop},i,t} = m_Y(X_{i,t})\, P_{c,i,t}\, X_{i,t},
+\end{equation}
+where $P_{c,i,t}$ is the crop price per unit (lbs) relevant to that season and location. When $m_Y$ is positive, revenue is proportional to effective foragers---a reduced-form stand-in for pollination contracts that reward colony strength up to a point. When the threshold is exceeded, marginal pollination value is set to zero in this period, which can be read as sufficient pollination capacity for the contracted crop.
+
+\subsection{Biological dynamics for colony count and bee mass}
+
+Let $\alpha_{i,t}$ denote the weekly net growth rate of \emph{bee mass per colony}, expressed in frame-of-bees units per colony per week. This growth aggregates demographic turnover within surviving colonies: births of new bees and deaths from age or other within-colony attrition are both embedded in $\alpha_{i,t}$. It does \emph{not} include loss of entire colonies; that is captured separately by $\delta_{i,t}$.
+
+Let $\delta_{i,t}$ denote the proportional loss rate over the \emph{season} for whole-colony events (e.g.\ colony mortality, absconding, or other losses that remove a colony from the stock). The same $\delta_{i,t}$ scales down both the aggregate bee-mass stock $F_{i,t}$ and the colony count $C_{i,t}$ in the stock equations, so that lost colonies take their bees with them.
+
+With $\beta_{i,t}=\alpha_{i,t}\, t_{\mathrm{dur}}$,
+\begin{align}
+F^+_{i,t} &= \max\!\left(0,\; F_{i,t} + \beta_{i,t}\, C_{i,t} - \delta_{i,t}\, F_{i,t}\right), \\
+C^+_{i,t} &= C_{i,t}\,(1-\delta_{i,t}).
+\end{align}
+The term $\beta_{i,t} C_{i,t}$ adds bee mass in proportion to colony count (net growth inside surviving colonies); the term $-\delta_{i,t} F_{i,t}$ removes mass lost when whole colonies are lost. The max operator prevents negative stocks. Aggregating across locations gives pre-management stocks $C^{\mathrm{pre}}_t=\sum_i C^+_{i,t}$ and $F^{\mathrm{pre}}_t=\sum_i F^+_{i,t}$.
+
+\subsection{Operating profit within the period (before management)}
+
+Honey revenue uses the seasonal honey price $P_{h,i,t}$. Maintenance is modeled as a fixed annual cost per colony, allocated evenly across the four seasons. Feed cost uses $P_{\mathrm{feed}}$. Thus
+\begin{align}
+R_{\mathrm{honey},i,t} &= H_{i,t}\, P_{h,i,t}, \\
+\mathrm{Cost}^{\mathrm{maint}}_{i,t} &= C_{i,t}\, \frac{\mathrm{Cost}}{4}, \\
+\mathrm{Cost}^{\mathrm{feed}}_{i,t} &= U^+_{i,t}\, P_{\mathrm{feed}}, \\
+\Pi^{\mathrm{pre}}_{i,t} &= R_{\mathrm{honey},i,t} + R_{\mathrm{crop},i,t} - \mathrm{Cost}^{\mathrm{maint}}_{i,t} - \mathrm{Cost}^{\mathrm{feed}}_{i,t}.
+\end{align}
+Location-level profits are summed to a period total; management charges are applied after aggregation.
+
+\section{End-of-period management}
+
+After biological dynamics, voluntary management adjusts stocks. Let superscript ``pre'' denote aggregates after within-period production. Culling removes a fraction $r^{\mathrm{cull}}_t\in[0,1]$ of \emph{both} colonies and bee mass in frame units (weak colonies exit together with their bees):
+\begin{align}
+C'_{t} &= C^{\mathrm{pre}}_{t}\,(1-r^{\mathrm{cull}}_{t}), \\
+F'_{t} &= F^{\mathrm{pre}}_{t}\,(1-r^{\mathrm{cull}}_{t}).
+\end{align}
+Colony adjustment (splitting if $r^{\mathrm{adj}}_t>0$, merging if $r^{\mathrm{adj}}_t<0$) rescales colony count by $(1+r^{\mathrm{adj}}_t)$ while holding total bee mass fixed at $F'_{t}$, so mass is reallocated across the new number of colonies. Management costs (when applicable) are
+\begin{align}
+\mathrm{Cost}^{\mathrm{cull}}_{t} &= r^{\mathrm{cull}}_{t}\, F^{\mathrm{pre}}_{t}\, P_{\mathrm{cull}}, \\
+\mathrm{Cost}^{\mathrm{adj}}_{t} &= |r^{\mathrm{adj}}_{t}|\, C^{\mathrm{pre}}_{t}\, \begin{cases}
+P_{\mathrm{split}} & r^{\mathrm{adj}}_t>0 \\
+P_{\mathrm{merge}} & r^{\mathrm{adj}}_t<0
+\end{cases}
+\end{align}
+and are subtracted from period profit. The state at the start of the next period is $(C_{t+1},F_{t+1})$ after these operations.
+
+\section{Discounting}
+
+For present-value summaries of profit, the model compounds annual discounting at a quarterly rate: if $r_{\mathrm{ann}}$ is the annual discount rate in percent, period $k$ receives discount factor $(1+r_q)^{-(k-1)}$ with $r_q=(1+r_{\mathrm{ann}}/100)^{1/4}-1$.
+
+\section{Software}
+
+The model is implemented in R \cite{Rcore} using the Shiny framework. The authoritative equations and parameter wiring are in \texttt{beekeeping\_US\_single\_year.R} (including multi-location aggregation and allocation rules).
+
+\begin{thebibliography}{9}
+\bibitem{Rcore}
+R Core Team (2024).
+\textit{R: A Language and Environment for Statistical Computing.}
+R Foundation for Statistical Computing, Vienna, Austria.
+\url{https://www.R-project.org/}
+\end{thebibliography}
+
+\end{document}
